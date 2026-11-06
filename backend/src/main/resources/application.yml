@@ -56,8 +56,8 @@ ledgerline:
     jwt-expiration-ms: ${JWT_EXPIRATION_MS:86400000}
   demo:
     admin-username: "admin@ledgerline.test"
-    admin-password: ${DEMO_ADMIN_PASSWORD}
+    admin-password: ${DEMO_ADMIN_PASSWORD:}
     holder-username: "holder@ledgerline.test"
-    holder-password: ${DEMO_HOLDER_PASSWORD}
+    holder-password: ${DEMO_HOLDER_PASSWORD:}
     auditor-username: "auditor@ledgerline.test"
-    auditor-password: ${DEMO_AUDITOR_PASSWORD}
+    auditor-password: ${DEMO_AUDITOR_PASSWORD:}

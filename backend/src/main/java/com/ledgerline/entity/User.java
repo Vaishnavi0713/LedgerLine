@@ -35,6 +35,11 @@ public class User {
 
     public User() {}
 
+    @PreUpdate
+    public void onUpdate() {
+        this.updatedAt = Instant.now();
+    }
+
     public User(String username, String email, String passwordHash, UserRole role) {
         this.username = username;
         this.email = email;

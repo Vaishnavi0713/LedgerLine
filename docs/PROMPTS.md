@@ -168,3 +168,58 @@ This log documents interactions between the engineering lead and AI during the d
 
 ### 5. Relevant Git Commit Link
 - Commit: *Pending Milestone 1 final transaction boundary commit*
+
+---
+
+## Entry 4: Authentication, Stateless JWT & Role-Based Access Control (Milestone 2)
+
+- **Date**: 2026-11-06
+- **Category**: Security, Authentication, JWT, RBAC & Fine-Grained Authorization
+
+### 1. Prompt Given to AI
+> "Milestone 2: Authentication, JWT & Role-Based Access Control:
+> Implement secure authentication using Spring Boot and Spring Security:
+> - BCryptPasswordEncoder (strength 12) for password hashing; never store plaintext passwords.
+> - Account-holder registration and login returning signed HMAC-SHA256 JWT.
+> - Stateless session management; validate JWT signature and expiration on every request.
+> - Reject malformed, expired, tampered and invalid tokens.
+> - Implement GET /api/auth/me returning authenticated user information without password hash.
+> - Support three roles: ADMINISTRATOR, ACCOUNT_HOLDER, AUDITOR (strictly read-only).
+> - Build reusable account-level authorization foundation (AccountAuthorizationService) checking account_permissions table, denying by default, preventing cross-user account access without leaking account existence.
+> - Securely provision initial admin, auditor, and demo account holder via environment variables without hardcoded fallback credentials.
+> - Provide comprehensive automated test suite and documentation updates."
+
+### 2. What AI Produced Initially
+- Full implementation of DTOs, security filter chain (`JwtAuthenticationFilter`, `JwtAuthenticationEntryPoint`, `JwtAccessDeniedHandler`), modern JJWT 0.12.6 `JwtTokenProvider`, repositories, services (`AuthService`, `AccountAuthorizationService`, `UserBootstrapService`), controllers (`AuthController`, `AdminController`, `AuditController`), and `GlobalExceptionHandler`.
+- Initial test drafts contained several minor compilation and semantic defects:
+  1. `AccountAuthorizationServiceTest` referenced non-existent enum variants `AccountType.CUSTOMER_CHECKING` and `PermissionType.CAN_VIEW_BALANCE` instead of `AccountType.CUSTOMER` and `PermissionType.CAN_VIEW_STATEMENT`.
+  2. `AccountAuthorizationServiceTest` called an outdated `Account` constructor.
+  3. `GlobalExceptionHandler.handleBadCredentials` hardcoded the static string `"Invalid email or password"`, preventing deactivated account status messages from reaching the client.
+  4. In `AuthenticationSecurityIntegrationTest.testLogin_DeactivatedUser`, calling `userRepository.save()` inside a `@Transactional` test method without flushing left the modified entity un-persisted prior to the subsequent MockMvc dispatch.
+  5. In `application.yml`, strict `${DEMO_ADMIN_PASSWORD}` caused application boot failures in environments where demo passwords were intentionally omitted.
+
+### 3. What Was Specifically Wrong
+1. **Enum & Schema Drift**: Hallucinating `CUSTOMER_CHECKING` or `CAN_VIEW_BALANCE` broke compilation and departed from the canonical V1 Flyway schema and domain models established in Milestone 1.
+2. **Persistence Context Synchronization in Tests**: Without `saveAndFlush()`, Hibernate dirty checking deferred the update until transaction commit, leading to tests reading stale active user status.
+3. **Overly Restrictive Error Handler**: Hardcoding `"Invalid email or password"` in the global handler prevented callers and tests from differentiating deactivated accounts from wrong passwords.
+4. **Fragile Property Binding**: Using `${DEMO_ADMIN_PASSWORD}` without default empty fallback (`${DEMO_ADMIN_PASSWORD:}`) caused Spring Boot context initialization to fail when test configurations omitted demo seed credentials.
+
+### 4. What Was Corrected & How It Was Verified
+1. **Enum Alignment & Constructor Correction**:
+   - Updated `AccountAuthorizationServiceTest` to use `AccountType.CUSTOMER` and `PermissionType.CAN_VIEW_STATEMENT`.
+   - Used the canonical constructor: `new Account("ACC-101", "Alice Checking", AccountType.CUSTOMER, "INR")`.
+2. **Exception Handling & Test Entity Flushing**:
+   - Updated `GlobalExceptionHandler.handleBadCredentials` to evaluate `ex.getMessage()` while defaulting safely to `"Invalid email or password"`.
+   - Updated `AuthenticationSecurityIntegrationTest` to use `userRepository.saveAndFlush(holder)` to guarantee persistence context synchronization before MockMvc request execution.
+3. **Graceful Demo Password Handling**:
+   - Updated `application.yml` property placeholders to `${DEMO_ADMIN_PASSWORD:}` and enhanced `UserBootstrapService` to cleanly skip bootstrapping when variables are unset.
+4. **Comprehensive Test Suite & Verification**:
+   - Created 4 dedicated Milestone 2 test suites:
+     - `JwtTokenProviderTest` (7 unit tests): Signature validation, claim extraction, 256-bit key length enforcement, expiration, tampering, malformed inputs.
+     - `AccountAuthorizationServiceTest` (12 unit tests): Fine-grained permission checks, auditor read-only enforcement, default-deny behavior, anti-enumeration IDOR prevention.
+     - `AuthenticationSecurityIntegrationTest` (12 integration tests): Registration, BCrypt hash verification, password omission in responses, role tampering rejection, login authentication, deactivated user checks, `/api/auth/me` profile queries.
+     - `RoleBasedAccessControlIntegrationTest` (13 integration tests): Admin system-info access, user provisioning, auditor inspection access, auditor write prohibition (`POST /api/audit/records` denied).
+   - Executed Maven test suite: **72 total tests run, 61 passed, 11 live MySQL tests skipped as designed, 0 failures, 0 errors**.
+
+### 5. Relevant Git Commit Link
+- Commit: *Pending Milestone 2 completion commit*

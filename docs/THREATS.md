@@ -71,6 +71,41 @@ This document details the STRIDE-based threat analysis, specific financial attac
   2. Database uses `DECIMAL(19, 2)` for all monetary columns.
   3. Java uses `BigDecimal` with scale 2. Requests with $>2$ decimal places are rejected at the DTO validation layer. No silent rounding is permitted.
 
+### Threat 7: Credential Stuffing & Offline Hash Cracking (CWE-307 / CWE-916)
+- **Attack Scenario**: Attacker attempts automated password guessing or attempts to crack password hashes retrieved from database dumps.
+- **Mitigation**:
+  1. Password hashing uses `BCryptPasswordEncoder` with strength (cost factor) 12, introducing deliberate computational overhead against GPU/ASIC hash cracking.
+  2. Plaintext passwords and hash strings are excluded from all DTO responses (`UserResponse`, `AuthResponse`).
+  3. Password policy requires 8–128 characters, enforced at the validation boundary.
+
+### Threat 8: JWT Forgery, Key Downgrade & Signature Bypass (CWE-347)
+- **Attack Scenario**: Attacker modifies JWT token claims (e.g. changes `role: ACCOUNT_HOLDER` to `role: ADMINISTRATOR` or sets `alg: none`).
+- **Mitigation**:
+  1. Strong cryptographic signing using HMAC-SHA256 (`HS256`) via JJWT.
+  2. Startup validation requires minimum 256-bit (32-byte) secret key, throwing `IllegalStateException` on weak secrets.
+  3. Signature, expiration timestamp, and claims structure are strictly validated on every non-public request by `JwtTokenProvider` and `JwtAuthenticationFilter`.
+  4. Tampered tokens immediately trigger `JwtAuthenticationEntryPoint` returning HTTP `401 Unauthorized`.
+
+### Threat 9: Privilege Escalation via Registration Payload Tampering (CWE-269)
+- **Attack Scenario**: An attacker submits a POST request to public `/api/auth/register` with extra JSON fields such as `"role": "ADMINISTRATOR"` or `"role": "AUDITOR"`.
+- **Mitigation**:
+  1. The public registration DTO (`RegisterRequest`) deliberately lacks a `role` field.
+  2. The service layer (`AuthService.register`) unconditionally assigns `UserRole.ACCOUNT_HOLDER` to all public registrations.
+  3. Privileged roles (`ADMINISTRATOR`, `AUDITOR`) can only be provisioned by authenticated administrators via `/api/admin/users` or through controlled environment variable bootstrapping (`UserBootstrapService`).
+
+### Threat 10: Insecure Direct Object Reference (IDOR) & Account Enumeration (CWE-639 / CWE-200)
+- **Attack Scenario**: Authenticated User B attempts to access User A's account or probes sequential account IDs to detect valid accounts.
+- **Mitigation**:
+  1. `AccountAuthorizationService` checks explicit permissions in `account_permissions` for each user/account pair.
+  2. If an account does not exist or the user lacks access, the service throws `AccountAccessDeniedException` (HTTP `403 Forbidden`) rather than `ResourceNotFoundException` (HTTP `404 Not Found`).
+  3. Attackers cannot determine whether an account ID exists or merely lacks authorization.
+
+### Threat 11: Auditor Write Abuse & Compliance Bypass (CWE-285)
+- **Attack Scenario**: An auditor user attempts to modify audit trails, perform deposits, or initiate transfers.
+- **Mitigation**:
+  1. `SecurityConfig` explicitly denies all write methods (`POST`, `PUT`, `DELETE`) on `/api/audit/**` with `denyAll()`.
+  2. `AccountAuthorizationService` strictly denies mutating permissions (`CAN_DEPOSIT`, `CAN_WITHDRAW`, `CAN_TRANSFER`, `CAN_ADJUST`) to users with the `AUDITOR` role, granting only `CAN_VIEW_STATEMENT`.
+
 ---
 
 ## 3. Accepted Risks & Operational Boundaries

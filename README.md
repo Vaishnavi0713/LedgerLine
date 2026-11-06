@@ -131,9 +131,16 @@ To execute the automated regression test suite:
 cd backend
 mvn test
 ```
-The test suite includes:
-- Mathematical money conservation proofs.
-- 20-thread concurrent transfer and simultaneous withdrawal stress tests.
-- Single-transaction idempotency and retry verification.
-- Account-level authorization and auditor write prevention.
-- Database trigger immutability tests (rejecting raw SQL `UPDATE` and `DELETE`).
+
+The test suite covers:
+- **Authentication & Security (`AuthenticationSecurityIntegrationTest`)**: Registration, BCrypt password hashing (cost factor 12), payload role-tampering defense, password exclusion from API responses, login JWT issuance, deactivated account rejection, `/api/auth/me` profile resolution.
+- **Stateless JWT Provider (`JwtTokenProviderTest`)**: HMAC-SHA256 signing, claims extraction, 256-bit key length validation, expiration, signature verification, tampering detection.
+- **Role-Based Access Control (`RoleBasedAccessControlIntegrationTest`)**: RBAC enforcement across `ADMINISTRATOR`, `ACCOUNT_HOLDER`, and `AUDITOR` roles, admin user provisioning, auditor inspection, auditor write prohibition (`POST /api/audit/records` denied with `403 Forbidden`).
+- **Account-Level Authorization (`AccountAuthorizationServiceTest`)**: Reusable authorization foundation, fine-grained permission checks (`account_permissions`), default-deny semantics, auditor read-only enforcement, anti-enumeration IDOR prevention.
+- **Mathematical Money Conservation (`MoneyPrecisionAndConservationTest`)**: Exact INR scale 2 precision, rejection of $>2$ decimals and non-positive values, global conservation proofs.
+- **Stored Procedure Logic & Atomicity (`StoredProcedureLogicVerificationTest`)**: Multi-step transaction atomicity simulation, account derivation, deterministic lock acquisition ordering.
+- **Database Schema & Migrations (`FlywayMigrationScriptStructureTest`, `JpaEntityMappingTest`)**: Verification of Flyway migration integrity and JPA entity bindings.
+- **Live MySQL Integration (`MySqlDatabaseIntegrationTest`)**: Guarded by `RUN_MYSQL_TESTS=true` for live database verification against MySQL 8.0.
+
+> [!NOTE]
+> When executing `mvn test` without a running external MySQL container, live database tests are cleanly skipped (`11 skipped`), while all 61 in-memory and MockMvc tests execute and pass (`61 passed, 0 failures, 0 errors`).

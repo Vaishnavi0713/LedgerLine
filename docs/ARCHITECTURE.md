@@ -322,3 +322,47 @@ END;
 DELIMITER ;
 ```
 *(Identical triggers protect `statement_events`).*
+
+---
+
+## 7. Security Architecture, Authentication & Access Control (Milestone 2)
+
+### A. Authentication & Password Protection
+- **BCrypt Hashing**: All user passwords are encrypted using `BCryptPasswordEncoder` with a strength (cost factor) of 12. Plaintext passwords are never persisted or logged.
+- **DTO Exposure Prevention**: `UserResponse` and all API models deliberately omit sensitive fields (`password`, `passwordHash`).
+- **Registration Role Isolation**: Public self-registration (`POST /api/auth/register`) strictly assigns the `ACCOUNT_HOLDER` role. Any client attempt to inject elevated roles (e.g. `"role": "ADMINISTRATOR"`) is ignored by the domain model.
+
+### B. Stateless JWT Authentication Filter Chain
+- **Algorithm & Signatures**: HMAC-SHA256 (`HS256`) via JJWT 0.12.6 using a validated secret key of at least 256 bits (32 bytes).
+- **Stateless Sessions**: Session creation policy is set to `SessionCreationPolicy.STATELESS`. No session cookies or database session tokens are used.
+- **Filter Pipeline**:
+  1. `JwtAuthenticationFilter` intercepts incoming HTTP requests, extracts the `Authorization: Bearer <token>` header.
+  2. `JwtTokenProvider` validates the HMAC signature, expiration date, and payload integrity.
+  3. Validated claims (`userId`, `username`, `role`) are used to populate Spring's `SecurityContextHolder` with `ROLE_<ROLE_NAME>` authorities.
+  4. Unauthenticated or invalid requests trigger `JwtAuthenticationEntryPoint`, returning standard HTTP `401 Unauthorized` JSON problem details.
+  5. Forbidden role actions trigger `JwtAccessDeniedHandler`, returning standard HTTP `403 Forbidden` JSON problem details.
+
+### C. Role-Based Access Control (RBAC)
+Three distinct system roles are enforced via Spring Security `@PreAuthorize` and HttpSecurity request matchers:
+1. **`ADMINISTRATOR`**: Full administrative access (`/api/admin/**`). Can inspect system health, list users, and provision privileged roles (`AUDITOR`, `ADMINISTRATOR`).
+2. **`ACCOUNT_HOLDER`**: Standard customer role. Can register, log in, access authorized personal accounts, and initiate financial transactions. Strictly barred from `/api/admin/**` and `/api/audit/**`.
+3. **`AUDITOR`**: Strictly read-only role (`GET /api/audit/**`). Barred from administrative actions and all write operations (`POST`, `PUT`, `DELETE` on `/api/audit/**` are rejected with `403 Forbidden`).
+
+### D. Reusable Account-Level Authorization Foundation (`AccountAuthorizationService`)
+While roles provide coarse-grained access control, financial operations require fine-grained, account-level authorization:
+- **Default Deny**: Access is denied by default unless an explicit permission entry exists in `account_permissions`.
+- **Permission Types**:
+  - `CAN_DEPOSIT`: Deposit funds into account.
+  - `CAN_WITHDRAW`: Withdraw funds from account.
+  - `CAN_TRANSFER`: Transfer funds out of account.
+  - `CAN_VIEW_STATEMENT`: View statement events and account balance.
+  - `CAN_ADJUST`: Perform administrative balance adjustments / reversals.
+- **Auditor Read-Only Invariant**: The service enforces that users with role `AUDITOR` are permitted `CAN_VIEW_STATEMENT` only; mutating permissions (`CAN_DEPOSIT`, `CAN_WITHDRAW`, `CAN_TRANSFER`, `CAN_ADJUST`) throw `AccountAccessDeniedException` even if accidentally inserted in database tables.
+- **Anti-Enumeration (IDOR Prevention)**: If an account does not exist or the user has no permissions, the service throws `AccountAccessDeniedException` (HTTP `403 Forbidden`) rather than `ResourceNotFoundException` (HTTP `404 Not Found`), preventing malicious actors from enumerating valid account IDs.
+
+### E. Secure Initial User Bootstrapping
+- `UserBootstrapService` (`ApplicationRunner`) provisions initial administrator, auditor, and demo account holders on startup if and only if environment variables are supplied:
+  - `DEMO_ADMIN_PASSWORD`
+  - `DEMO_AUDITOR_PASSWORD`
+  - `DEMO_HOLDER_PASSWORD`
+- If variables are unset or blank, bootstrapping is safely skipped without throwing errors or hardcoding default passwords.
