@@ -45,7 +45,7 @@ public class MySqlDatabaseIntegrationTest {
         try (Connection conn = getAppConnection()) {
             conn.setAutoCommit(false);
 
-            String txId = "tx-test-a-" + UUID.randomUUID();
+            String txId = UUID.randomUUID().toString();
             String refId = "ref-a-" + UUID.randomUUID();
 
             // 1. Insert PENDING transaction
@@ -109,7 +109,7 @@ public class MySqlDatabaseIntegrationTest {
         try (Connection conn = getAppConnection()) {
             conn.setAutoCommit(false);
 
-            String txId = "tx-test-b-" + UUID.randomUUID();
+            String txId = UUID.randomUUID().toString();
             String refId = "ref-b-" + UUID.randomUUID();
 
             // 1. Insert PENDING transaction
@@ -155,7 +155,7 @@ public class MySqlDatabaseIntegrationTest {
         try (Connection conn = getAppConnection()) {
             conn.setAutoCommit(false);
 
-            String txId = "tx-test-c-" + UUID.randomUUID();
+            String txId = UUID.randomUUID().toString();
             String refId = "ref-c-" + UUID.randomUUID();
 
             // 1. Insert PENDING transaction
@@ -204,7 +204,7 @@ public class MySqlDatabaseIntegrationTest {
         try (Connection conn = getAppConnection()) {
             conn.setAutoCommit(false);
 
-            String txId = "tx-test-d-" + UUID.randomUUID();
+            String txId = UUID.randomUUID().toString();
             String refId = "ref-d-" + UUID.randomUUID();
 
             try (PreparedStatement ps = conn.prepareStatement(
@@ -248,7 +248,7 @@ public class MySqlDatabaseIntegrationTest {
     @DisplayName("Test E: Two concurrent posting attempts serialize; exactly one succeeds")
     @EnabledIfEnvironmentVariable(named = "RUN_MYSQL_TESTS", matches = "true")
     void testE_ConcurrentDuplicatePostingSerializes() throws Exception {
-        String txId = "tx-test-e-" + UUID.randomUUID();
+        String txId = UUID.randomUUID().toString();
         String refId = "ref-e-" + UUID.randomUUID();
 
         // Setup transaction using primary connection
@@ -346,7 +346,9 @@ public class MySqlDatabaseIntegrationTest {
             String sql = "UPDATE accounts SET balance = 999999.00 WHERE id = 1";
             try (Statement stmt = conn.createStatement()) {
                 SQLException exception = assertThrows(SQLException.class, () -> stmt.executeUpdate(sql));
-                assertEquals(1142, exception.getErrorCode(), "Must raise MySQL error 1142 (UPDATE command denied for column 'balance')");
+                assertEquals(1143, exception.getErrorCode(), "Must raise MySQL error 1143 (UPDATE command denied for column 'balance')");
+                assertTrue(exception.getMessage().contains("UPDATE command denied") && exception.getMessage().contains("column 'balance'"),
+                        "Error message must indicate UPDATE command denied for column 'balance'");
             }
         }
     }
@@ -371,7 +373,7 @@ public class MySqlDatabaseIntegrationTest {
     @EnabledIfEnvironmentVariable(named = "RUN_MYSQL_TESTS", matches = "true")
     void testF5_StoredProcedureRejectsForgedParameters() throws SQLException {
         try (Connection conn = getAppConnection()) {
-            String txId = "tx-forged-" + UUID.randomUUID();
+            String txId = UUID.randomUUID().toString();
             String refId = "ref-forged-" + UUID.randomUUID();
 
             try (PreparedStatement ps = conn.prepareStatement(

@@ -22,6 +22,7 @@ class FlywayMigrationScriptStructureTest {
         assertTrue(Files.exists(MIGRATIONS_DIR.resolve("V2__seed_system_accounts.sql")), "V2__seed_system_accounts.sql must exist");
         assertTrue(Files.exists(MIGRATIONS_DIR.resolve("V3__ledger_immutability_triggers.sql")), "V3__ledger_immutability_triggers.sql must exist");
         assertTrue(Files.exists(MIGRATIONS_DIR.resolve("V4__app_user_grants_and_views.sql")), "V4__app_user_grants_and_views.sql must exist");
+        assertTrue(Files.exists(MIGRATIONS_DIR.resolve("V5__grant_definer_routine_execute.sql")), "V5__grant_definer_routine_execute.sql must exist");
     }
 
     @Test
@@ -208,5 +209,29 @@ class FlywayMigrationScriptStructureTest {
         int recordNextDeclare = spRecordBody.indexOf("DECLARE ", recordHandlerIndex + 1);
         assertEquals(-1, recordNextDeclare,
                 "In sp_record_statement_event, no DECLARE statement is permitted after the handler declaration");
+    }
+
+    @Test
+    @DisplayName("V5 Grants: Verify definer user routine EXECUTE grants")
+    void testV5DefinerRoutineExecuteGrants() throws IOException {
+        Path v5Path = MIGRATIONS_DIR.resolve("V5__grant_definer_routine_execute.sql");
+        assertTrue(Files.exists(v5Path), "V5__grant_definer_routine_execute.sql must exist");
+        String v5Content = Files.readString(v5Path);
+
+        // Verify exact routine grants to definerUser placeholder
+        assertTrue(v5Content.contains("GRANT EXECUTE ON PROCEDURE sp_post_ledger_pair TO '${definerUser}'@'%';"),
+                "V5 must grant EXECUTE on sp_post_ledger_pair to definerUser");
+        assertTrue(v5Content.contains("GRANT EXECUTE ON PROCEDURE sp_record_statement_event TO '${definerUser}'@'%';"),
+                "V5 must grant EXECUTE on sp_record_statement_event to definerUser");
+
+        // Verify no extra privileges are granted
+        assertFalse(v5Content.contains("GRANT ALL"), "V5 must NOT grant ALL PRIVILEGES");
+        assertFalse(v5Content.contains("GRANT SELECT"), "V5 must NOT grant SELECT");
+        assertFalse(v5Content.contains("GRANT INSERT"), "V5 must NOT grant INSERT");
+        assertFalse(v5Content.contains("GRANT UPDATE"), "V5 must NOT grant UPDATE");
+        assertFalse(v5Content.contains("GRANT DELETE"), "V5 must NOT grant DELETE");
+        assertFalse(v5Content.contains("FLUSH PRIVILEGES"), "V5 must NOT execute FLUSH PRIVILEGES");
+        assertFalse(v5Content.lines().filter(l -> !l.trim().startsWith("--")).anyMatch(l -> l.contains("${appUser}")),
+                "V5 SQL statements must NOT grant or reference appUser");
     }
 }

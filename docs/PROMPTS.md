@@ -274,3 +274,29 @@ This log documents interactions between the engineering lead and AI during the d
 
 ### 5. Relevant Git Commit Link
 - Commit: *Pending Milestone 3 completion commit*
+
+---
+
+## Session: MySQL Database Migration V5 & Definer Routine Grant Hardening
+
+### 1. User Prompt Summary
+Implement the permanent V5 Flyway migration `V5__grant_definer_routine_execute.sql` to grant `EXECUTE` on `sp_post_ledger_pair` and `sp_record_statement_event` to `${definerUser}`. Update `FlywayMigrationScriptStructureTest` to verify V5 structure and placeholder consistency. Document architecture updates, verify test counts, and explain Flyway startup behavior.
+
+### 2. Root Cause Analysis & Security Background
+- **MySQL Definer Execution Model**: Under MySQL 8.0 (§25.6), stored routines defined with `SQL SECURITY DEFINER` require the executing thread to transition to the definer account (`ledgerline_definer`). Before executing the body, MySQL requires that the definer account itself holds `EXECUTE` privilege on the routine.
+- **Flyway Migration Asymmetry**: Migrations run as `ledgerline_migrator`. When `ledgerline_migrator` creates a procedure with `DEFINER = 'ledgerline_definer'@'%'`, MySQL's `automatic_sp_privileges` assigns privileges only to the creator (`ledgerline_migrator`), not the definer.
+- **Defect in V4**: V4 granted `EXECUTE` to `${appUser}`, but omitted `${definerUser}`, resulting in `ERROR 1370 (42000): execute command denied to user 'ledgerline_definer'@'%' for routine 'sp_post_ledger_pair'`.
+
+### 3. Implementation
+- Created `backend/src/main/resources/db/migration/V5__grant_definer_routine_execute.sql`:
+  - `GRANT EXECUTE ON PROCEDURE sp_post_ledger_pair TO '${definerUser}'@'%';`
+  - `GRANT EXECUTE ON PROCEDURE sp_record_statement_event TO '${definerUser}'@'%';`
+- Updated `FlywayMigrationScriptStructureTest`:
+  - Verified `V5__grant_definer_routine_execute.sql` existence.
+  - Added `testV5DefinerRoutineExecuteGrants` asserting exact routine grants to `${definerUser}`, verifying absence of global privileges, DML grants, `FLUSH PRIVILEGES`, or changes to `${appUser}`.
+- Updated `docs/ARCHITECTURE.md` to document the definer routine `EXECUTE` requirement and V5 migration.
+
+### 4. Verification Results
+- Full Maven test suite executed with all 11 MySQL integration tests enabled.
+- All tests passed with 0 failures, 0 errors, 0 skipped.
+
