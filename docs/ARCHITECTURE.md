@@ -366,3 +366,30 @@ While roles provide coarse-grained access control, financial operations require 
   - `DEMO_AUDITOR_PASSWORD`
   - `DEMO_HOLDER_PASSWORD`
 - If variables are unset or blank, bootstrapping is safely skipped without throwing errors or hardcoding default passwords.
+
+---
+
+## 8. Account Management & Lifecycle Architecture (Milestone 3)
+
+### A. Secure Account Creation & Zero-Money Invariant
+- **Strict Zero-Balance Invariant**: Every account is created with `balance = 0.00 INR` and `statement_sequence_counter = 0`. Client requests cannot specify initial balances or opening entries. Money creation outside double-entry clearing deposits is architecturally impossible.
+- **Server-Derived Identity**: The account owner is strictly derived from the validated JWT principal (`AuthService.getAuthenticatedUser()`). Client-supplied fields such as `userId` or `ownerId` in request bodies are ignored.
+- **Auditor Creation Bar**: The `AUDITOR` role is barred from account creation at both the controller layer (`@PreAuthorize("hasRole('ACCOUNT_HOLDER')")`) and inside the service layer (`AccountService.createAccount`).
+- **Cryptographic Account Number Generation**: Account numbers follow the format `ACC-YYYY-XXXXXXXXXX`, using `java.security.SecureRandom` with 40 bits of entropy and database uniqueness verification before persistence.
+
+### B. Transactional Atomicity of Account & Permission Creation
+- The creation of an account requires two synchronized steps:
+  1. Persisting the `Account` entity in `accounts`.
+  2. Inserting 4 permission rows in `account_permissions` (`CAN_DEPOSIT`, `CAN_WITHDRAW`, `CAN_TRANSFER`, `CAN_VIEW_STATEMENT`).
+- Both operations execute inside a single `@Transactional(rollbackFor = Exception.class)` boundary. If permission assignment fails (e.g. database error or foreign key violation), the entire transaction rolls back, preventing orphaned accounts.
+
+### C. Fine-Grained Retrieval & IDOR Defense
+- **Account Filtering**: `GET /api/accounts` queries `accountRepository.findAccountsByUserId(userId)` for `ACCOUNT_HOLDER`, returning only accounts for which the user holds explicit permissions.
+- **Auditor & Admin Scope**: Administrators and auditors retrieve system-wide account lists in read-only mode.
+- **Insecure Direct Object Reference (IDOR) Prevention**: Requests to `/api/accounts/{id}` and `/api/accounts/{id}/balance` evaluate `accountAuthorizationService.requirePermission(currentUser, accountId, CAN_VIEW_STATEMENT)`. If the account belongs to another user or does not exist, the server throws `AccountAccessDeniedException` (HTTP `403 Forbidden`), preventing IDOR attacks and account existence enumeration.
+
+### D. Administrative Account Management & Status Rules
+- **Status Lifecycle**: Accounts exist in one of three states: `ACTIVE`, `FROZEN`, or `CLOSED`.
+- **Administrative Transitions**: Status transitions are restricted to the `ADMINISTRATOR` role via `PATCH /api/admin/accounts/{id}/status`.
+- **Immutability of Balance**: Status updates modify only `status` and `updated_at`. Account balances and historical ledger entries are untouched. Accounts are never deleted.
+- **Inactive Account Enforcement**: The service layer provides `requireActiveAccount(accountId)`. Any future financial operation (deposits, withdrawals, transfers) targeting an account in `FROZEN` or `CLOSED` state is rejected with `AccountAccessDeniedException`. Viewing historical balances and statements remains permitted for audit and compliance.

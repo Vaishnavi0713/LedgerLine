@@ -106,6 +106,34 @@ This document details the STRIDE-based threat analysis, specific financial attac
   1. `SecurityConfig` explicitly denies all write methods (`POST`, `PUT`, `DELETE`) on `/api/audit/**` with `denyAll()`.
   2. `AccountAuthorizationService` strictly denies mutating permissions (`CAN_DEPOSIT`, `CAN_WITHDRAW`, `CAN_TRANSFER`, `CAN_ADJUST`) to users with the `AUDITOR` role, granting only `CAN_VIEW_STATEMENT`.
 
+### Threat 12: Artificial Opening Balance Injection / Unauthorized Money Creation (CWE-471 / CWE-840)
+- **Attack Scenario**: A malicious client submits `{"name": "Savings", "balance": 100000.00}` to `POST /api/accounts` attempting to conjure funds out of nothingness upon account creation.
+- **Mitigation**:
+  1. `CreateAccountRequest` DTO contains zero monetary fields (`balance`, `initialBalance` are neither bound nor recognized).
+  2. `AccountService.createAccount` hardcodes `balance = BigDecimal.ZERO.setScale(2)`.
+  3. All balance modifications must flow strictly through the double-entry ledger posting routine (`sp_post_ledger_pair`).
+
+### Threat 13: Identity Spoofing in Account Creation (CWE-287 / CWE-639)
+- **Attack Scenario**: Attacker submits `POST /api/accounts` with `{"userId": 1, "ownerId": 1}` attempting to create an account assigned to another customer or administrator.
+- **Mitigation**:
+  1. `CreateAccountRequest` does not accept user IDs.
+  2. Account ownership is derived strictly from the verified JWT principal in `SecurityContextHolder`.
+  3. Only administrators can provision accounts for other users via the dedicated `/api/admin/accounts` endpoint, which enforces `ADMINISTRATOR` role verification.
+
+### Threat 14: Inactive / Frozen Account Exploits (CWE-668 / CWE-284)
+- **Attack Scenario**: A user attempts to execute financial operations on a frozen or closed account.
+- **Mitigation**:
+  1. Administrative status management (`PATCH /api/admin/accounts/{id}/status`) allows freezing or closing accounts.
+  2. `AccountAuthorizationService.requireActiveAccount` validates that accounts are in `ACTIVE` status before any financial operation can proceed, rejecting inactive accounts with `AccountAccessDeniedException`.
+  3. Read-only inspection (statement and balance queries) remains accessible for auditing and dispute resolution.
+
+### Threat 15: Cross-User Account Enumeration & Information Disclosure (CWE-200 / CWE-639)
+- **Attack Scenario**: Attacker iterates sequential account IDs (`/api/accounts/1`, `/api/accounts/2`) to discover existing accounts and infer customer balances.
+- **Mitigation**:
+  1. Non-existent accounts and unauthorized accounts both return HTTP `403 Forbidden` (`AccountAccessDeniedException`).
+  2. Error responses never disclose whether the account ID exists.
+  3. Account numbers are generated using cryptographically secure random tokens (`ACC-YYYY-XXXXXXXXXX`), preventing sequential enumeration.
+
 ---
 
 ## 3. Accepted Risks & Operational Boundaries

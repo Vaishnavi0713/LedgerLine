@@ -17,16 +17,13 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.math.BigDecimal;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("Milestone 2: Account Authorization Service Unit Tests")
+@DisplayName("Account Authorization Service Unit Tests")
 class AccountAuthorizationServiceTest {
 
     @Mock
@@ -44,7 +41,10 @@ class AccountAuthorizationServiceTest {
     private User aliceHolder;
     private User bobHolder;
     private User auditorUser;
+    private User adminUser;
     private Account aliceAccount;
+    private Account frozenAccount;
+    private Account closedAccount;
 
     @BeforeEach
     void setUp() {
@@ -57,8 +57,20 @@ class AccountAuthorizationServiceTest {
         auditorUser = new User("auditor", "auditor@example.com", "hash3", UserRole.AUDITOR);
         auditorUser.setId(103L);
 
+        adminUser = new User("admin", "admin@example.com", "hash4", UserRole.ADMINISTRATOR);
+        adminUser.setId(104L);
+
         aliceAccount = new Account("ACC-101", "Alice Checking", AccountType.CUSTOMER, "INR");
         aliceAccount.setId(201L);
+        aliceAccount.setStatus(AccountStatus.ACTIVE);
+
+        frozenAccount = new Account("ACC-102", "Frozen Account", AccountType.CUSTOMER, "INR");
+        frozenAccount.setId(202L);
+        frozenAccount.setStatus(AccountStatus.FROZEN);
+
+        closedAccount = new Account("ACC-103", "Closed Account", AccountType.CUSTOMER, "INR");
+        closedAccount.setId(203L);
+        closedAccount.setStatus(AccountStatus.CLOSED);
     }
 
     @Test
@@ -112,7 +124,6 @@ class AccountAuthorizationServiceTest {
         boolean canViewStatement = accountAuthorizationService.hasPermission(auditorUser, 201L, PermissionType.CAN_VIEW_STATEMENT);
 
         assertTrue(canViewStatement);
-        // Auditor statement view doesn't require individual account_permissions row
         verifyNoInteractions(accountPermissionRepository);
     }
 
@@ -125,6 +136,20 @@ class AccountAuthorizationServiceTest {
         assertFalse(accountAuthorizationService.hasPermission(auditorUser, 201L, PermissionType.CAN_WITHDRAW));
         assertFalse(accountAuthorizationService.hasPermission(auditorUser, 201L, PermissionType.CAN_TRANSFER));
         assertFalse(accountAuthorizationService.hasPermission(auditorUser, 201L, PermissionType.CAN_ADJUST));
+
+        verifyNoInteractions(accountPermissionRepository);
+    }
+
+    @Test
+    @DisplayName("hasPermission: ADMINISTRATOR role has CAN_VIEW_STATEMENT and CAN_ADJUST, but denied customer mutations")
+    void testHasPermission_Administrator_Rules() {
+        when(accountRepository.findById(201L)).thenReturn(Optional.of(aliceAccount));
+
+        assertTrue(accountAuthorizationService.hasPermission(adminUser, 201L, PermissionType.CAN_VIEW_STATEMENT));
+        assertTrue(accountAuthorizationService.hasPermission(adminUser, 201L, PermissionType.CAN_ADJUST));
+        assertFalse(accountAuthorizationService.hasPermission(adminUser, 201L, PermissionType.CAN_DEPOSIT));
+        assertFalse(accountAuthorizationService.hasPermission(adminUser, 201L, PermissionType.CAN_WITHDRAW));
+        assertFalse(accountAuthorizationService.hasPermission(adminUser, 201L, PermissionType.CAN_TRANSFER));
 
         verifyNoInteractions(accountPermissionRepository);
     }
@@ -148,7 +173,6 @@ class AccountAuthorizationServiceTest {
         AccountAccessDeniedException ex = assertThrows(AccountAccessDeniedException.class, () ->
                 accountAuthorizationService.requirePermission(aliceHolder, 999L, PermissionType.CAN_VIEW_STATEMENT));
 
-        // Must be access denied, NOT ResourceNotFoundException (preventing account enumeration)
         assertTrue(ex.getMessage().contains("Access denied to account 999"));
     }
 
@@ -192,6 +216,17 @@ class AccountAuthorizationServiceTest {
     }
 
     @Test
+    @DisplayName("requirePermission: throws AccountAccessDeniedException when Administrator attempts customer deposits/withdrawals")
+    void testRequirePermission_AdministratorMutating_ThrowsAccessDenied() {
+        when(accountRepository.findById(201L)).thenReturn(Optional.of(aliceAccount));
+
+        AccountAccessDeniedException ex = assertThrows(AccountAccessDeniedException.class, () ->
+                accountAuthorizationService.requirePermission(adminUser, 201L, PermissionType.CAN_DEPOSIT));
+
+        assertTrue(ex.getMessage().contains("Administrator role cannot perform direct customer financial operations"));
+    }
+
+    @Test
     @DisplayName("requirePermission: delegates to authService.getAuthenticatedUser() when called with accountId and permission")
     void testRequirePermission_WithContextUser() {
         when(authService.getAuthenticatedUser()).thenReturn(aliceHolder);
@@ -203,5 +238,48 @@ class AccountAuthorizationServiceTest {
                 accountAuthorizationService.requirePermission(201L, PermissionType.CAN_VIEW_STATEMENT));
 
         verify(authService).getAuthenticatedUser();
+    }
+
+    @Test
+    @DisplayName("requireActiveAccount: succeeds for ACTIVE account")
+    void testRequireActiveAccount_Active_Success() {
+        when(accountRepository.findById(201L)).thenReturn(Optional.of(aliceAccount));
+
+        Account result = accountAuthorizationService.requireActiveAccount(201L);
+        assertNotNull(result);
+        assertEquals(AccountStatus.ACTIVE, result.getStatus());
+    }
+
+    @Test
+    @DisplayName("requireActiveAccount: rejects FROZEN account with AccountAccessDeniedException")
+    void testRequireActiveAccount_Frozen_ThrowsAccessDenied() {
+        when(accountRepository.findById(202L)).thenReturn(Optional.of(frozenAccount));
+
+        AccountAccessDeniedException ex = assertThrows(AccountAccessDeniedException.class, () ->
+                accountAuthorizationService.requireActiveAccount(202L));
+
+        assertTrue(ex.getMessage().contains("FROZEN and cannot perform financial operations"));
+    }
+
+    @Test
+    @DisplayName("requireActiveAccount: rejects CLOSED account with AccountAccessDeniedException")
+    void testRequireActiveAccount_Closed_ThrowsAccessDenied() {
+        when(accountRepository.findById(203L)).thenReturn(Optional.of(closedAccount));
+
+        AccountAccessDeniedException ex = assertThrows(AccountAccessDeniedException.class, () ->
+                accountAuthorizationService.requireActiveAccount(203L));
+
+        assertTrue(ex.getMessage().contains("CLOSED and cannot perform financial operations"));
+    }
+
+    @Test
+    @DisplayName("requireActiveAccount: rejects non-existent account without leaking existence")
+    void testRequireActiveAccount_NonExistent_ThrowsAccessDenied() {
+        when(accountRepository.findById(999L)).thenReturn(Optional.empty());
+
+        AccountAccessDeniedException ex = assertThrows(AccountAccessDeniedException.class, () ->
+                accountAuthorizationService.requireActiveAccount(999L));
+
+        assertTrue(ex.getMessage().contains("Access denied to account 999"));
     }
 }

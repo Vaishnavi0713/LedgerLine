@@ -223,3 +223,54 @@ This log documents interactions between the engineering lead and AI during the d
 
 ### 5. Relevant Git Commit Link
 - Commit: *Pending Milestone 2 completion commit*
+
+---
+
+## Entry 5: Account Management, Lifecycle & Fine-Grained Authorization (Milestone 3)
+
+- **Date**: 2026-11-06
+- **Category**: Account Management, Authorization, IDOR Defense & Status Lifecycle
+
+### 1. Prompt Given to AI
+> "Implement Milestone 3 – Account Management in the existing LedgerLine project located at D:\LedgerLine:
+> - Account creation: Authenticated ACCOUNT_HOLDER creates an account for themselves; server obtains owner identity from JWT principal, never client-supplied ID; ADMINISTRATOR can create accounts for existing users; AUDITOR cannot create accounts; accounts start with zero balance (0.00 INR); secure unique account number generation; validate account details; assign appropriate permissions during creation; no client-supplied initial balances.
+> - Account retrieval: Get all accounts accessible to authenticated user; get account details by ID; get account balance; admin can retrieve accounts across users; auditor can retrieve account information in read-only mode; prevent IDOR and cross-user account access; consistent JSON problem details.
+> - Account management: Account status retrieval; account activation/deactivation through administrative operations; enforce that inactive accounts cannot be used for future financial operations; do not delete accounts or modify historical ledger records; preserve audit rules.
+> - Database and financial integrity: Reuse existing schema and migrations; no direct balance updates; failed permission assignment cannot leave partially created accounts (transactional atomicity).
+> - Endpoints: POST /api/accounts, GET /api/accounts, GET /api/accounts/{id}, GET /api/accounts/{id}/balance, GET /api/admin/accounts, POST /api/admin/accounts, PATCH /api/admin/accounts/{id}/status.
+> - Automated tests & documentation: Comprehensive automated test suite; no money movement; no React frontend."
+
+### 2. What AI Produced
+- DTOs: `CreateAccountRequest`, `AdminCreateAccountRequest`, `UpdateAccountStatusRequest`, `AccountResponse`, `AccountBalanceResponse`.
+- Service Layer: `AccountService` implementing `createAccount`, `createAccountByAdmin`, `getAccountsForCurrentUser`, `getAccountById`, `getAccountBalance`, `getAllAccountsForAdmin`, `updateAccountStatus`.
+- Enhanced `AccountAuthorizationService`: Added role rules for `ADMINISTRATOR` (`CAN_VIEW_STATEMENT`, `CAN_ADJUST`) while prohibiting customer mutations (`CAN_DEPOSIT`, `CAN_WITHDRAW`, `CAN_TRANSFER`), and added `requireActiveAccount(accountId)` to validate account activity status.
+- Controllers: `AccountController` (`POST /api/accounts`, `GET /api/accounts`, `GET /api/accounts/{id}`, `GET /api/accounts/{id}/balance`) and added admin endpoints to `AdminController` (`GET /api/admin/accounts`, `POST /api/admin/accounts`, `PATCH /api/admin/accounts/{id}/status`).
+- Test Suites:
+  - `AccountServiceTest` (17 unit tests).
+  - `AccountAuthorizationServiceTest` (expanded to 18 unit tests).
+  - `AccountManagementIntegrationTest` (11 integration tests).
+
+### 3. Issues Identified & Corrections
+1. **Auditor Account Creation Guard**:
+   - Initial review noted that `@PreAuthorize("hasRole('ACCOUNT_HOLDER')")` on the controller level protects HTTP access, but service-level defenses are mandatory for defense-in-depth.
+   - *Correction*: Enforced in `AccountService.createAccount` that any call where `currentUser.getRole() == UserRole.AUDITOR` throws `AccountAccessDeniedException`, preventing internal or filter-bypass account creation.
+2. **Opening Balance Tampering Defense**:
+   - Attackers might submit payloads with `"balance": 50000.00` or `"userId": 1`.
+   - *Correction*: `CreateAccountRequest` explicitly omits all balance and owner fields; `AccountService` hardcodes `balance = BigDecimal.ZERO.setScale(2)` and derives the owner directly from Spring Security's `authService.getAuthenticatedUser()`. Verified with integration tests that malicious payload properties have zero effect.
+3. **Creation Atomicity & Partial Account Creation**:
+   - If an account is inserted into `accounts` but a database failure occurs while inserting into `account_permissions`, an orphaned, unmanageable account would be left behind.
+   - *Correction*: Annotated `createAccount` and `createAccountByAdmin` with `@Transactional(rollbackFor = Exception.class)`, guaranteeing that account persistence and the 4 permission records (`CAN_DEPOSIT`, `CAN_WITHDRAW`, `CAN_TRANSFER`, `CAN_VIEW_STATEMENT`) commit together or roll back entirely.
+4. **Inactive Account Safeguards**:
+   - Accounts in `FROZEN` or `CLOSED` state must not be permitted to initiate financial operations in future milestones.
+   - *Correction*: Added `requireActiveAccount(accountId)` to `AccountAuthorizationService`. Verified that `ACTIVE` accounts pass while `FROZEN` and `CLOSED` accounts are rejected with `AccountAccessDeniedException`.
+5. **Anti-Enumeration Consistency**:
+   - Querying a non-existent account ID or an account belonging to another user must return `403 Forbidden` (`AccountAccessDeniedException`) rather than `404 Not Found`, preventing account probing attacks. Verified across all retrieval endpoints.
+
+### 4. Verification Results
+- Executed full Maven test suite (`mvn test`):
+  - Total tests configured: **110 tests**.
+  - **99 passed, 11 skipped as designed (live MySQL tests), 0 failures, 0 errors**.
+  - Milestone 3 specific coverage: 46 automated tests directly validating account creation, retrieval, IDOR defense, admin management, status lifecycle, and authorization rules.
+
+### 5. Relevant Git Commit Link
+- Commit: *Pending Milestone 3 completion commit*

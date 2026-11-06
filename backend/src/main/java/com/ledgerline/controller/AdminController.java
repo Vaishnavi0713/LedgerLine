@@ -1,10 +1,14 @@
 package com.ledgerline.controller;
 
+import com.ledgerline.dto.AccountResponse;
+import com.ledgerline.dto.AdminCreateAccountRequest;
 import com.ledgerline.dto.AdminCreateUserRequest;
+import com.ledgerline.dto.UpdateAccountStatusRequest;
 import com.ledgerline.dto.UserResponse;
 import com.ledgerline.entity.User;
 import com.ledgerline.exception.DuplicateResourceException;
 import com.ledgerline.repository.UserRepository;
+import com.ledgerline.service.AccountService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,10 +27,15 @@ public class AdminController {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final AccountService accountService;
 
-    public AdminController(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+    public AdminController(
+            UserRepository userRepository,
+            PasswordEncoder passwordEncoder,
+            AccountService accountService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.accountService = accountService;
     }
 
     @GetMapping("/users")
@@ -64,5 +73,34 @@ public class AdminController {
                 "totalUsers", userRepository.count(),
                 "timestamp", Instant.now().toString()
         ));
+    }
+
+    /**
+     * Lists all accounts across all users for administrative review.
+     */
+    @GetMapping("/accounts")
+    public ResponseEntity<List<AccountResponse>> listAllAccounts() {
+        List<AccountResponse> accounts = accountService.getAllAccountsForAdmin();
+        return ResponseEntity.ok(accounts);
+    }
+
+    /**
+     * Creates an account for a specified user as an administrator.
+     */
+    @PostMapping("/accounts")
+    public ResponseEntity<AccountResponse> createAccountForUser(@Valid @RequestBody AdminCreateAccountRequest request) {
+        AccountResponse response = accountService.createAccountByAdmin(request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    /**
+     * Updates an account's status (ACTIVE, FROZEN, CLOSED).
+     */
+    @PatchMapping("/accounts/{accountId}/status")
+    public ResponseEntity<AccountResponse> updateAccountStatus(
+            @PathVariable Long accountId,
+            @Valid @RequestBody UpdateAccountStatusRequest request) {
+        AccountResponse response = accountService.updateAccountStatus(accountId, request.getStatus());
+        return ResponseEntity.ok(response);
     }
 }

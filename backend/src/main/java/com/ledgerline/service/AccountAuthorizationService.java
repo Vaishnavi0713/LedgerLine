@@ -1,6 +1,7 @@
 package com.ledgerline.service;
 
 import com.ledgerline.entity.Account;
+import com.ledgerline.entity.AccountStatus;
 import com.ledgerline.entity.PermissionType;
 import com.ledgerline.entity.User;
 import com.ledgerline.entity.UserRole;
@@ -36,7 +37,7 @@ public class AccountAuthorizationService {
             return false;
         }
 
-        // Account must exist; throw exception without leaking whether it exists
+        // Account must exist; return false without leaking whether it exists
         Account account = accountRepository.findById(accountId)
                 .orElse(null);
         if (account == null) {
@@ -50,7 +51,14 @@ public class AccountAuthorizationService {
             return permission == PermissionType.CAN_VIEW_STATEMENT;
         }
 
-        // Check account_permissions table
+        // ADMINISTRATOR role rules:
+        // Administrators have read-only inspection (CAN_VIEW_STATEMENT) and adjustment/reversal (CAN_ADJUST)
+        // Administrators do not execute direct customer deposits, withdrawals, or transfers
+        if (user.getRole() == UserRole.ADMINISTRATOR) {
+            return permission == PermissionType.CAN_VIEW_STATEMENT || permission == PermissionType.CAN_ADJUST;
+        }
+
+        // ACCOUNT_HOLDER: Check account_permissions table
         return accountPermissionRepository.existsByUserIdAndAccountIdAndPermission(
                 user.getId(), accountId, permission);
     }
@@ -65,12 +73,20 @@ public class AccountAuthorizationService {
             throw new AccountAccessDeniedException("Authorization denied: missing security parameters.");
         }
 
+        // Anti-enumeration: throw AccountAccessDeniedException if account does not exist
         Account account = accountRepository.findById(accountId)
                 .orElseThrow(() -> new AccountAccessDeniedException("Access denied to account " + accountId));
 
         if (user.getRole() == UserRole.AUDITOR) {
             if (permission != PermissionType.CAN_VIEW_STATEMENT) {
                 throw new AccountAccessDeniedException("Auditor role has strictly read-only access and cannot perform mutating financial operations.");
+            }
+            return;
+        }
+
+        if (user.getRole() == UserRole.ADMINISTRATOR) {
+            if (permission != PermissionType.CAN_VIEW_STATEMENT && permission != PermissionType.CAN_ADJUST) {
+                throw new AccountAccessDeniedException("Administrator role cannot perform direct customer financial operations.");
             }
             return;
         }
@@ -91,5 +107,23 @@ public class AccountAuthorizationService {
     public void requirePermission(Long accountId, PermissionType permission) {
         User currentUser = authService.getAuthenticatedUser();
         requirePermission(currentUser, accountId, permission);
+    }
+
+    /**
+     * Validates that an account is ACTIVE. Inactive accounts (FROZEN, CLOSED) cannot perform financial operations.
+     */
+    @Transactional(readOnly = true)
+    public Account requireActiveAccount(Long accountId) {
+        if (accountId == null) {
+            throw new AccountAccessDeniedException("Authorization denied: missing account parameter.");
+        }
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new AccountAccessDeniedException("Access denied to account " + accountId));
+
+        if (account.getStatus() != AccountStatus.ACTIVE) {
+            throw new AccountAccessDeniedException("Account " + account.getAccountNumber() +
+                    " is " + account.getStatus() + " and cannot perform financial operations.");
+        }
+        return account;
     }
 }

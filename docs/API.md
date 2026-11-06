@@ -41,17 +41,21 @@
 | `/api/admin/system-info` | GET | `ADMINISTRATOR` | None | Returns system health, total user count |
 | `/api/audit/records` | GET | `AUDITOR`, `ADMINISTRATOR` | None | Strictly read-only audit inspection |
 | `/api/audit/records` | POST/PUT/DELETE | None | None | **Deny All** (`403 Forbidden`) — Auditor write prohibition |
-| `/api/accounts` | POST | `ADMINISTRATOR`, `ACCOUNT_HOLDER` | None | Creates new customer account with `0.00 INR` |
+| `/api/accounts` | POST | `ACCOUNT_HOLDER` | None | Creates new customer account with `0.00 INR` |
 | `/api/accounts` | GET | Any Authenticated | None | Lists accounts authorized for current user |
+| `/api/accounts/{id}` | GET | Any Authenticated | `CAN_VIEW_STATEMENT` | Returns account details |
 | `/api/accounts/{id}/balance` | GET | Any Authenticated | `CAN_VIEW_STATEMENT` | Returns account balance |
 | `/api/accounts/{id}/statement` | GET | Any Authenticated | `CAN_VIEW_STATEMENT` | Returns chronological statement |
+| `/api/admin/accounts` | GET | `ADMINISTRATOR` | None | Lists all accounts across all users |
+| `/api/admin/accounts` | POST | `ADMINISTRATOR` | None | Provisions account for target user with `0.00 INR` |
+| `/api/admin/accounts/{id}/status` | PATCH | `ADMINISTRATOR` | None | Updates status (`ACTIVE`, `FROZEN`, `CLOSED`) |
 | `/api/deposits` | POST | `ACCOUNT_HOLDER` | `CAN_DEPOSIT` | Increases customer balance; Debits Clearing |
 | `/api/withdrawals` | POST | `ACCOUNT_HOLDER` | `CAN_WITHDRAW` | Decreases customer balance; Credits Clearing |
 | `/api/transfers` | POST | `ACCOUNT_HOLDER` | `CAN_TRANSFER` (on source) | Reallocates funds between two customer accounts |
 | `/api/transfers/{id}/reversal` | POST | `ADMINISTRATOR` | `CAN_ADJUST` | Compensating transfer reversing previous tx |
 
 > [!NOTE]
-> The **`AUDITOR`** role has strictly **Read-Only** access. Any request by an auditor to mutating operations (`POST`, `PUT`, `DELETE` on `/api/audit/**` or financial mutation endpoints) is rejected with HTTP `403 Forbidden`.
+> The **`AUDITOR`** role has strictly **Read-Only** access. Any request by an auditor to mutating operations (`POST`, `PUT`, `DELETE` on `/api/accounts`, `/api/admin/**`, `/api/audit/**` or financial mutation endpoints) is rejected with HTTP `403 Forbidden`.
 
 ---
 
@@ -235,23 +239,148 @@ Explicitly barred by security configuration. All write methods (`POST`, `PUT`, `
 
 ---
 
-### 3.2 Account Management & Statements
+### 3.2 Account Management & Retrieval (Milestone 3)
 
-#### `GET /accounts/{id}/balance`
-Returns account balance and active status.
+#### `POST /api/accounts`
+Creates a new customer checking/savings account for the authenticated `ACCOUNT_HOLDER`.
+- The server obtains the account owner's identity strictly from the authenticated JWT principal.
+- Client attempts to set initial balance or owner ID are ignored.
+- Account is initialized with `0.00 INR` balance and `ACTIVE` status.
+- Atomically assigns standard customer permissions (`CAN_DEPOSIT`, `CAN_WITHDRAW`, `CAN_TRANSFER`, `CAN_VIEW_STATEMENT`).
+
+**Headers**:
+```http
+Authorization: Bearer <jwt-token>
+Content-Type: application/json
+```
+
+**Request Body**:
+```json
+{
+  "name": "Primary Checking",
+  "currency": "INR"
+}
+```
+
+**Response (201 Created)**:
+```json
+{
+  "id": 101,
+  "accountNumber": "ACC-2026-F3C28B1D4E",
+  "name": "Primary Checking",
+  "accountType": "CUSTOMER",
+  "currency": "INR",
+  "balance": 0.00,
+  "statementSequenceCounter": 0,
+  "status": "ACTIVE",
+  "createdAt": "2026-11-06T12:00:00Z",
+  "updatedAt": "2026-11-06T12:00:00Z"
+}
+```
+
+**Error Responses**:
+- `400 Bad Request`: Validation failure (blank name, name > 100 chars, or currency != `INR`).
+- `401 Unauthorized`: Unauthenticated request.
+- `403 Forbidden`: `AUDITOR` attempting account creation.
+
+#### `GET /api/accounts`
+Retrieves all accounts accessible to the caller:
+- `ACCOUNT_HOLDER`: returns only accounts explicitly granted to the user in `account_permissions`.
+- `ADMINISTRATOR` / `AUDITOR`: returns all accounts across the system.
+
+**Response (200 OK)**:
+```json
+[
+  {
+    "id": 101,
+    "accountNumber": "ACC-2026-F3C28B1D4E",
+    "name": "Primary Checking",
+    "accountType": "CUSTOMER",
+    "currency": "INR",
+    "balance": 0.00,
+    "statementSequenceCounter": 0,
+    "status": "ACTIVE",
+    "createdAt": "2026-11-06T12:00:00Z",
+    "updatedAt": "2026-11-06T12:00:00Z"
+  }
+]
+```
+
+#### `GET /api/accounts/{id}`
+Returns details for a specific account. Validates that the caller holds `CAN_VIEW_STATEMENT` permission (or role `AUDITOR` / `ADMINISTRATOR`). Non-existent accounts and unauthorized attempts return `403 Forbidden` to prevent IDOR account enumeration.
+
+**Response (200 OK)**:
+```json
+{
+  "id": 101,
+  "accountNumber": "ACC-2026-F3C28B1D4E",
+  "name": "Primary Checking",
+  "accountType": "CUSTOMER",
+  "currency": "INR",
+  "balance": 0.00,
+  "statementSequenceCounter": 0,
+  "status": "ACTIVE",
+  "createdAt": "2026-11-06T12:00:00Z",
+  "updatedAt": "2026-11-06T12:00:00Z"
+}
+```
+
+**Error Responses**:
+- `401 Unauthorized`: Unauthenticated.
+- `403 Forbidden`: Access denied or account non-existent.
+
+#### `GET /api/accounts/{id}/balance`
+Returns balance and active status for an authorized account.
 
 **Response (200 OK)**:
 ```json
 {
   "accountId": 101,
-  "accountNumber": "ACC-2026-0001",
+  "accountNumber": "ACC-2026-F3C28B1D4E",
   "currency": "INR",
-  "balance": "400.00",
-  "status": "ACTIVE"
+  "balance": 0.00,
+  "status": "ACTIVE",
+  "asOf": "2026-11-06T12:15:00Z"
 }
 ```
 
-#### `GET /accounts/{id}/statement`
+#### `GET /api/admin/accounts`
+Administrative endpoint listing all accounts across all users. Requires `ADMINISTRATOR` role.
+
+**Response (200 OK)**: Returns JSON array of `AccountResponse` objects.
+
+#### `POST /api/admin/accounts`
+Administrative endpoint allowing an administrator to provision an account for an existing user. Requires `ADMINISTRATOR` role.
+
+**Request Body**:
+```json
+{
+  "userId": 2,
+  "name": "Corporate Payroll",
+  "accountType": "CUSTOMER",
+  "currency": "INR"
+}
+```
+
+**Response (201 Created)**: Returns the newly provisioned `AccountResponse`.
+
+#### `PATCH /api/admin/accounts/{id}/status`
+Administrative endpoint to change an account's operational status (`ACTIVE`, `FROZEN`, `CLOSED`). Does not alter account balances or historical ledger records. Requires `ADMINISTRATOR` role.
+
+**Request Body**:
+```json
+{
+  "status": "FROZEN"
+}
+```
+
+**Response (200 OK)**: Returns updated `AccountResponse` with new status.
+
+---
+
+### 3.3 Statements (Upcoming Milestone 4)
+
+#### `GET /api/accounts/{id}/statement`
 Retrieves chronological statement ordered strictly by `sequenceNumber ASC`.
 
 **Response (200 OK)**:
