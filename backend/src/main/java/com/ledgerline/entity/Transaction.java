@@ -1,7 +1,10 @@
 package com.ledgerline.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+
 import java.math.BigDecimal;
+import java.sql.Types;
 import java.time.Instant;
 
 @Entity
@@ -30,6 +33,7 @@ public class Transaction {
     @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal amount;
 
+    @JdbcTypeCode(Types.CHAR)
     @Column(nullable = false, length = 3)
     private String currency = "INR";
 

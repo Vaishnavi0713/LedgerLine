@@ -23,7 +23,17 @@ FROM ledger_entries
 GROUP BY transaction_id
 HAVING net_imbalance != 0.00;
 
--- 2. Strictly balanced, hardened ledger posting procedure
+-- 2. Definer Grants: Grant dedicated definer narrow DML permissions required for stored procedures
+GRANT SELECT, UPDATE ON accounts TO '${definerUser}'@'%';
+GRANT SELECT, UPDATE ON transactions TO '${definerUser}'@'%';
+GRANT SELECT, INSERT ON ledger_entries TO '${definerUser}'@'%';
+GRANT SELECT, INSERT ON statement_events TO '${definerUser}'@'%';
+
+-- 3. Stored Procedures Idempotency: Drop existing procedures if present (ensures repeatable migration on retry)
+DROP PROCEDURE IF EXISTS sp_post_ledger_pair;
+DROP PROCEDURE IF EXISTS sp_record_statement_event;
+
+-- 4. Strictly balanced, hardened ledger posting procedure
 DELIMITER //
 
 CREATE DEFINER = '${definerUser}'@'%' PROCEDURE sp_post_ledger_pair(
@@ -39,12 +49,7 @@ CREATE DEFINER = '${definerUser}'@'%' PROCEDURE sp_post_ledger_pair(
 )
 SQL SECURITY DEFINER
 BEGIN
-    -- Error handler: Propagates exceptions directly to the caller without independently rolling back or committing
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        RESIGNAL;
-    END;
-
+    -- 1. All local variable declarations must precede handler declarations in MySQL
     DECLARE v_tx_status VARCHAR(20);
     DECLARE v_tx_amount DECIMAL(19, 2);
     DECLARE v_tx_source_id BIGINT;
@@ -68,6 +73,13 @@ BEGIN
     DECLARE v_dest_status VARCHAR(20);
     DECLARE v_dest_derived_balance DECIMAL(19, 2);
     DECLARE v_dest_derived_seq BIGINT;
+
+    -- 2. Error handler: Propagates exceptions directly to the caller without independently rolling back or committing
+    -- MySQL requires handlers to be declared after all variable and condition declarations
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        RESIGNAL;
+    END;
 
     -- 1. Fetch and lock the parent transaction record
     SELECT status, amount, source_account_id, destination_account_id, initiating_user_id, type
@@ -235,12 +247,7 @@ CREATE DEFINER = '${definerUser}'@'%' PROCEDURE sp_record_statement_event(
 )
 SQL SECURITY DEFINER
 BEGIN
-    -- Error handler: Propagates exceptions directly to the caller without independently rolling back or committing
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        RESIGNAL;
-    END;
-
+    -- 1. All local variable declarations must precede handler declarations in MySQL
     DECLARE v_acc_balance DECIMAL(19, 2);
     DECLARE v_acc_seq BIGINT;
     DECLARE v_acc_status VARCHAR(20);
@@ -253,6 +260,13 @@ BEGIN
 
     DECLARE v_effective_seq BIGINT;
     DECLARE v_effective_initiator BIGINT;
+
+    -- 2. Error handler: Propagates exceptions directly to the caller without independently rolling back or committing
+    -- MySQL requires handlers to be declared after all variable and condition declarations
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        RESIGNAL;
+    END;
 
     -- 1. Validate positive amount
     IF p_amount <= 0.00 THEN
@@ -344,7 +358,7 @@ END //
 
 DELIMITER ;
 
--- 3. Operational Grants: Allow application to create transactions, users, permissions, idempotency keys, and audit logs
+-- 5. Operational Grants: Allow application to create transactions, users, permissions, idempotency keys, and audit logs
 -- Restrict accounts UPDATE to non-balance columns (name, status) to prevent direct balance manipulation
 GRANT INSERT ON accounts TO '${appUser}'@'%';
 GRANT UPDATE (name, status) ON accounts TO '${appUser}'@'%';
@@ -355,9 +369,7 @@ GRANT INSERT, UPDATE ON users TO '${appUser}'@'%';
 GRANT INSERT, UPDATE ON account_permissions TO '${appUser}'@'%';
 GRANT INSERT ON audit_records TO '${appUser}'@'%';
 
--- 4. Stored Procedure Grants: Allow application to invoke write boundaries
+-- 6. Stored Procedure Grants: Allow application to invoke write boundaries
 GRANT EXECUTE ON PROCEDURE sp_post_ledger_pair TO '${appUser}'@'%';
 GRANT EXECUTE ON PROCEDURE sp_record_statement_event TO '${appUser}'@'%';
 
--- FLUSH PRIVILEGES to activate grants
-FLUSH PRIVILEGES;

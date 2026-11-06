@@ -109,6 +109,12 @@ class FlywayMigrationScriptStructureTest {
         assertTrue(v4Content.contains("CREATE OR REPLACE VIEW v_unbalanced_transactions"), "V4 must create view v_unbalanced_transactions");
         assertTrue(v4Content.contains("HAVING net_imbalance != 0.00"), "View must filter for non-zero net imbalance");
 
+        // Verify routine definer user grants (narrow DML scope before procedure creation)
+        assertTrue(v4Content.contains("GRANT SELECT, UPDATE ON accounts TO '${definerUser}'@'%'"), "Must grant SELECT, UPDATE on accounts to definerUser");
+        assertTrue(v4Content.contains("GRANT SELECT, UPDATE ON transactions TO '${definerUser}'@'%'"), "Must grant SELECT, UPDATE on transactions to definerUser");
+        assertTrue(v4Content.contains("GRANT SELECT, INSERT ON ledger_entries TO '${definerUser}'@'%'"), "Must grant SELECT, INSERT on ledger_entries to definerUser");
+        assertTrue(v4Content.contains("GRANT SELECT, INSERT ON statement_events TO '${definerUser}'@'%'"), "Must grant SELECT, INSERT on statement_events to definerUser");
+
         // Verify stored procedure write boundaries with dedicated definer and SQL SECURITY DEFINER
         assertTrue(v4Content.contains("CREATE DEFINER = '${definerUser}'@'%' PROCEDURE sp_post_ledger_pair"), "Must define sp_post_ledger_pair with dedicated definer");
         assertTrue(v4Content.contains("CREATE DEFINER = '${definerUser}'@'%' PROCEDURE sp_record_statement_event"), "Must define sp_record_statement_event with dedicated definer");
@@ -149,5 +155,58 @@ class FlywayMigrationScriptStructureTest {
 
         // Verify DELETE is NOT granted on any table
         assertFalse(v4Content.contains("GRANT DELETE"), "Must NOT grant DELETE on any table");
+
+        // Verify repeatable procedure creation (idempotent retry defense)
+        assertTrue(v4Content.contains("DROP PROCEDURE IF EXISTS sp_post_ledger_pair"), "V4 must drop sp_post_ledger_pair if exists for idempotent retries");
+        assertTrue(v4Content.contains("DROP PROCEDURE IF EXISTS sp_record_statement_event"), "V4 must drop sp_record_statement_event if exists for idempotent retries");
+
+        // Verify FLUSH PRIVILEGES is NOT present (requires RELOAD privilege and is redundant)
+        assertFalse(v4Content.contains("FLUSH PRIVILEGES"), "V4 must NOT execute FLUSH PRIVILEGES (requires RELOAD privilege)");
+    }
+
+    @Test
+    @DisplayName("V4 Stored Procedure Declarations: Verify that local variable declarations precede handler declarations (MySQL Error 1337 defense)")
+    void testV4StoredProcedureDeclarationOrder() throws IOException {
+        String v4Content = Files.readString(MIGRATIONS_DIR.resolve("V4__app_user_grants_and_views.sql"));
+
+        // 1. Check sp_post_ledger_pair
+        int spPostStart = v4Content.indexOf("CREATE DEFINER = '${definerUser}'@'%' PROCEDURE sp_post_ledger_pair");
+        assertTrue(spPostStart > 0, "sp_post_ledger_pair must exist in V4");
+        int spPostEnd = v4Content.indexOf("END //", spPostStart);
+        assertTrue(spPostEnd > spPostStart, "sp_post_ledger_pair must have closing END //");
+        String spPostBody = v4Content.substring(spPostStart, spPostEnd);
+
+        int postHandlerIndex = spPostBody.indexOf("DECLARE EXIT HANDLER FOR SQLEXCEPTION");
+        assertTrue(postHandlerIndex > 0, "sp_post_ledger_pair must define EXIT HANDLER");
+
+        // Verify that every variable declaration appears before the handler
+        int lastPostVarIndex = spPostBody.lastIndexOf("DECLARE v_");
+        assertTrue(lastPostVarIndex > 0, "sp_post_ledger_pair must declare local variables");
+        assertTrue(lastPostVarIndex < postHandlerIndex,
+                "In sp_post_ledger_pair, all variable declarations must precede handler declarations (MySQL Error 1337)");
+
+        // Verify no DECLARE statement appears after the handler
+        int postNextDeclare = spPostBody.indexOf("DECLARE ", postHandlerIndex + 1);
+        assertEquals(-1, postNextDeclare,
+                "In sp_post_ledger_pair, no DECLARE statement is permitted after the handler declaration");
+
+        // 2. Check sp_record_statement_event
+        int spRecordStart = v4Content.indexOf("CREATE DEFINER = '${definerUser}'@'%' PROCEDURE sp_record_statement_event");
+        assertTrue(spRecordStart > 0, "sp_record_statement_event must exist in V4");
+        int spRecordEnd = v4Content.indexOf("END //", spRecordStart);
+        assertTrue(spRecordEnd > spRecordStart, "sp_record_statement_event must have closing END //");
+        String spRecordBody = v4Content.substring(spRecordStart, spRecordEnd);
+
+        int recordHandlerIndex = spRecordBody.indexOf("DECLARE EXIT HANDLER FOR SQLEXCEPTION");
+        assertTrue(recordHandlerIndex > 0, "sp_record_statement_event must define EXIT HANDLER");
+
+        int lastRecordVarIndex = spRecordBody.lastIndexOf("DECLARE v_");
+        assertTrue(lastRecordVarIndex > 0, "sp_record_statement_event must declare local variables");
+        assertTrue(lastRecordVarIndex < recordHandlerIndex,
+                "In sp_record_statement_event, all variable declarations must precede handler declarations (MySQL Error 1337)");
+
+        int recordNextDeclare = spRecordBody.indexOf("DECLARE ", recordHandlerIndex + 1);
+        assertEquals(-1, recordNextDeclare,
+                "In sp_record_statement_event, no DECLARE statement is permitted after the handler declaration");
     }
 }

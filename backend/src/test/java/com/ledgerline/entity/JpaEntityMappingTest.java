@@ -114,4 +114,51 @@ class JpaEntityMappingTest {
 
         entityManager.flush();
     }
+
+    @Test
+    @DisplayName("Verify Account and Transaction currency fields explicitly map to JDBC Types.CHAR (Hibernate validation defense)")
+    void testCurrencyFieldMappingIsExplicitCharType() throws NoSuchFieldException {
+        // 1. Account.currency
+        java.lang.reflect.Field accountCurrency = Account.class.getDeclaredField("currency");
+        org.hibernate.annotations.JdbcTypeCode accountJdbcType = accountCurrency.getAnnotation(org.hibernate.annotations.JdbcTypeCode.class);
+        assertNotNull(accountJdbcType, "Account.currency must be annotated with @JdbcTypeCode");
+        assertEquals(java.sql.Types.CHAR, accountJdbcType.value(), "Account.currency must map to JDBC Types.CHAR (not VARCHAR)");
+
+        jakarta.persistence.Column accountCol = accountCurrency.getAnnotation(jakarta.persistence.Column.class);
+        assertNotNull(accountCol, "Account.currency must define @Column");
+        assertEquals(3, accountCol.length(), "Account.currency length must be 3");
+
+        // 2. Transaction.currency
+        java.lang.reflect.Field txCurrency = Transaction.class.getDeclaredField("currency");
+        org.hibernate.annotations.JdbcTypeCode txJdbcType = txCurrency.getAnnotation(org.hibernate.annotations.JdbcTypeCode.class);
+        assertNotNull(txJdbcType, "Transaction.currency must be annotated with @JdbcTypeCode");
+        assertEquals(java.sql.Types.CHAR, txJdbcType.value(), "Transaction.currency must map to JDBC Types.CHAR (not VARCHAR)");
+
+        jakarta.persistence.Column txCol = txCurrency.getAnnotation(jakarta.persistence.Column.class);
+        assertNotNull(txCol, "Transaction.currency must define @Column");
+        assertEquals(3, txCol.length(), "Transaction.currency length must be 3");
+    }
+
+    @Test
+    @DisplayName("Verify Hibernate Metamodel resolves currency column JDBC type code as Types.CHAR")
+    void testHibernateMetamodelCurrencyJdbcTypeCode() {
+        org.hibernate.engine.spi.SessionFactoryImplementor sessionFactory =
+                entityManager.getEntityManagerFactory().unwrap(org.hibernate.engine.spi.SessionFactoryImplementor.class);
+        org.hibernate.metamodel.spi.MappingMetamodelImplementor metamodel =
+                (org.hibernate.metamodel.spi.MappingMetamodelImplementor) sessionFactory.getMappingMetamodel();
+
+        org.hibernate.metamodel.mapping.EntityMappingType accountMapping = metamodel.findEntityDescriptor(Account.class);
+        assertNotNull(accountMapping);
+        org.hibernate.metamodel.mapping.AttributeMapping accountCurrencyAttr = accountMapping.findAttributeMapping("currency");
+        assertNotNull(accountCurrencyAttr);
+        assertEquals(java.sql.Types.CHAR, accountCurrencyAttr.getSingleJdbcMapping().getJdbcType().getJdbcTypeCode(),
+                "Account.currency JDBC type code in Hibernate metamodel must be Types.CHAR");
+
+        org.hibernate.metamodel.mapping.EntityMappingType txMapping = metamodel.findEntityDescriptor(Transaction.class);
+        assertNotNull(txMapping);
+        org.hibernate.metamodel.mapping.AttributeMapping txCurrencyAttr = txMapping.findAttributeMapping("currency");
+        assertNotNull(txCurrencyAttr);
+        assertEquals(java.sql.Types.CHAR, txCurrencyAttr.getSingleJdbcMapping().getJdbcType().getJdbcTypeCode(),
+                "Transaction.currency JDBC type code in Hibernate metamodel must be Types.CHAR");
+    }
 }

@@ -1,7 +1,10 @@
 package com.ledgerline.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+
 import java.math.BigDecimal;
+import java.sql.Types;
 import java.time.Instant;
 
 @Entity
@@ -22,6 +25,7 @@ public class Account {
     @Column(name = "account_type", nullable = false, length = 20)
     private AccountType accountType = AccountType.CUSTOMER;
 
+    @JdbcTypeCode(Types.CHAR)
     @Column(nullable = false, length = 3)
     private String currency = "INR";
 
