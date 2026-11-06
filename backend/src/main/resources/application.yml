@@ -10,7 +10,7 @@ spring:
 
   # Application Runtime Datasource (Least-Privilege User: ledgerline_app)
   datasource:
-    url: ${DB_URL:jdbc:mysql://localhost:3306/ledgerline_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    url: ${DB_URL:jdbc:mysql://localhost:3306/ledgerline_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&useAffectedRows=true}
     username: ${DB_APP_USER}
     password: ${DB_APP_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -20,6 +20,8 @@ spring:
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
+      data-source-properties:
+        useAffectedRows: true
 
   # Schema Migrations (Privileged Migration User: ledgerline_migrator)
   flyway:

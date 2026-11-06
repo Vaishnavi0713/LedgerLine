@@ -300,3 +300,33 @@ Implement the permanent V5 Flyway migration `V5__grant_definer_routine_execute.s
 - Full Maven test suite executed with all 11 MySQL integration tests enabled.
 - All tests passed with 0 failures, 0 errors, 0 skipped.
 
+---
+
+## Session: Milestone M4 — Idempotency Foundation Implementation
+
+### 1. User Prompt Summary
+Implement the Idempotency Foundation for Milestone M4 (Financial Transaction Engine). Verify schema completeness for idempotency keys without creating V6. Implement `IdempotencyKeyRepository`, `IdempotencyService`, `IdempotencyConflictException`, deterministic SHA-256 payload hashing, atomic key reservation, payload mismatch detection (HTTP 409), original response replay, and concurrency handling. Create unit tests and live MySQL integration tests covering all 8 specified scenarios.
+
+### 2. Schema Verification (No V6 Migration Required)
+- **Table Structure**: `idempotency_keys` in `V1__init_schema.sql` contains `user_id`, `operation_type`, `idempotency_key`, `request_hash` (VARCHAR(64)), `status` ('IN_PROGRESS', 'COMPLETED', 'FAILED'), `response_status` (INT), `response_body` (TEXT), `created_at`, `completed_at`, `expires_at`.
+- **Constraint**: `uq_user_op_key UNIQUE (user_id, operation_type, idempotency_key)` allows independent keys across different users and operation types.
+- **Grants**: `V4__app_user_grants_and_views.sql` grants `INSERT, UPDATE` on `idempotency_keys` to `ledgerline_app`.
+- **Conclusion**: The existing schema completely satisfies all idempotency requirements. No V6 migration is required.
+
+### 3. Implementation Details
+- `IdempotencyConflictException`: Custom exception mapped to HTTP 409 Conflict in `GlobalExceptionHandler`.
+- `IdempotencyKeyRepository`: Added `findByUserIdAndOperationTypeAndIdempotencyKey`, `insertIfNotExists` (using MySQL `INSERT IGNORE` native query to prevent rollback-only transaction pollution during unique key races), and `updateStatusAndResponse`.
+- `IdempotentExecutionResult<T>`: DTO record containing `replayed` boolean, `statusCode`, and `body`.
+- `IdempotencyService`:
+  - Deterministic SHA-256 payload hashing with canonical JSON serialization.
+  - `executeIdempotent(...)`: Atomic reservation in the shared `@Transactional` boundary; on unexpected failure, rolling back transaction rolls back the reservation so retries succeed.
+  - On business refusal (e.g. 422), caches the refusal response and replays it identically on retry without re-executing.
+  - Concurrent request handling: Blocks on InnoDB unique key lock; if a concurrent request is `IN_PROGRESS`, polls until completion or timeout.
+  - Payload mismatch detection: Returns HTTP 409 if payload hash differs from original request with the same key.
+
+### 4. Verification Results
+- `IdempotencyServiceTest`: 7 unit tests passed.
+- `MySqlIdempotencyIntegrationTest`: 8 live MySQL integration tests passed (testing reservation, replay, 409 mismatch, 8-thread concurrency, rollback on failure, refusal caching, multi-user independence, multi-op independence).
+- Full Maven test suite: **129 tests passed, 0 failures, 0 errors, 0 skipped**.
+
+
