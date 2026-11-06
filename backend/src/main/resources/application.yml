@@ -1,0 +1,60 @@
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: always
+    include-binding-errors: always
+
+spring:
+  application:
+    name: ledgerline-backend
+
+  # Application Runtime Datasource (Least-Privilege User: ledgerline_app)
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/ledgerline_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${DB_APP_USER}
+    password: ${DB_APP_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # Schema Migrations (Privileged Migration User: ledgerline_migrator)
+  flyway:
+    enabled: true
+    url: ${DB_URL:jdbc:mysql://localhost:3306/ledgerline_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    user: ${DB_MIGRATOR_USER}
+    password: ${DB_MIGRATOR_PASSWORD}
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  # JPA & Hibernate Settings
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: false
+        dialect: org.hibernate.dialect.MySQLDialect
+
+  # Jackson JSON: Explicitly preserve BigDecimal as exact plain numbers/strings without scientific or float drift
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+      write-bigdecimal-as-plain: true
+
+# Custom LedgerLine Configuration
+ledgerline:
+  security:
+    jwt-secret: ${JWT_SECRET}
+    jwt-expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+  demo:
+    admin-username: "admin@ledgerline.test"
+    admin-password: ${DEMO_ADMIN_PASSWORD}
+    holder-username: "holder@ledgerline.test"
+    holder-password: ${DEMO_HOLDER_PASSWORD}
+    auditor-username: "auditor@ledgerline.test"
+    auditor-password: ${DEMO_AUDITOR_PASSWORD}

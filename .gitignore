@@ -1,0 +1,57 @@
+# Build and Dependency Artifacts
+target/
+backend/target/
+*.class
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Node / Frontend Artifacts
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.pnp
+.pnp.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment and Secrets (CRITICAL: Never commit secrets)
+.env
+.env.local
+.env.*.local
+*.env
+*.pem
+*.key
+*.p12
+
+# IDE and Editor Configurations
+.idea/
+*.iml
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs and Runtime Files
+logs/
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# Local Database and Docker Volumes
+mysql_data/
+.mysql/
