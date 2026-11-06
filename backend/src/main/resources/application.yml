@@ -29,6 +29,9 @@ spring:
     password: ${DB_MIGRATOR_PASSWORD}
     locations: classpath:db/migration
     baseline-on-migrate: true
+    placeholders:
+      appUser: ${DB_APP_USER:ledgerline_app}
+      definerUser: ${DB_DEFINER_USER:ledgerline_definer}
 
   # JPA & Hibernate Settings
   jpa:

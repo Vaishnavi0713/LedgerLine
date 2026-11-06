@@ -9,6 +9,8 @@ services:
       DB_NAME: ${DB_NAME:-ledgerline_db}
       DB_MIGRATOR_USER: ${DB_MIGRATOR_USER:-ledgerline_migrator}
       DB_MIGRATOR_PASSWORD: ${DB_MIGRATOR_PASSWORD:?DB_MIGRATOR_PASSWORD must be set in .env}
+      DB_DEFINER_USER: ${DB_DEFINER_USER:-ledgerline_definer}
+      DB_DEFINER_PASSWORD: ${DB_DEFINER_PASSWORD:-}
       DB_APP_USER: ${DB_APP_USER:-ledgerline_app}
       DB_APP_PASSWORD: ${DB_APP_PASSWORD:?DB_APP_PASSWORD must be set in .env}
     ports:

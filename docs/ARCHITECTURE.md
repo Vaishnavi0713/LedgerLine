@@ -238,19 +238,73 @@ ALTER TABLE transactions
 
 ---
 
-## 9. Privilege Separation & Immutability Triggers
+## 9. Privilege Separation, Stored Procedure Write Boundaries & Immutability Triggers
 
-### User Roles at Database Level
-1. **Migration User (`ledgerline_migrator`)**:
-   - Used by Flyway at boot/deployment.
-   - Privileges: `SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES, TRIGGER` on `ledgerline_db.*`.
-2. **Runtime User (`ledgerline_app`)**:
-   - Used by the Spring Boot connection pool.
-   - Privileges: `SELECT, INSERT, UPDATE` on operational tables (`accounts`, `transactions`, `idempotency_keys`, `users`, `account_permissions`).
-   - Privileges: `SELECT, INSERT` ONLY on audit/ledger tables (`ledger_entries`, `statement_events`, `audit_records`).
-   - Zero DDL privileges (`DROP`, `ALTER`, `CREATE`, `TRUNCATE`, `TRIGGER` are strictly forbidden).
+### A. Four-Tier Ledger & Account Security Architecture
+Financial integrity, double-entry equality, and tamper-resistance are enforced across four complementary tiers:
 
-### Engine-Level Immutability Triggers
+1. **User Privilege Layer & Revoked Direct Ledger Writes**:
+   - The application runtime user (`ledgerline_app`) is granted **only** `SELECT` at the database level (`ledgerline_db.*`) via initialization script `01-init-users.sh`.
+   - Table-specific `INSERT` and `UPDATE` privileges are granted strictly on mutable operational tables via migration `V4__app_user_grants_and_views.sql`.
+   - On `accounts`, `UPDATE` is strictly column-restricted: `GRANT UPDATE (name, status) ON accounts TO 'ledgerline_app'@'%'`. Direct modification of `balance` and `statement_sequence_counter` by the application user is **denied by MySQL** (`ERROR 1142`).
+   - Direct `INSERT`, `UPDATE`, and `DELETE` on `ledger_entries` and `statement_events` are **completely denied**.
+   - `DELETE` is **completely barred** across all tables in the database.
+   - The runtime user has zero DDL privileges (no `DROP`, `ALTER`, `CREATE`, `TRUNCATE`, `TRIGGER`, or `GRANT`).
+
+2. **Dedicated Routine Definer (`ledgerline_definer`)**:
+   - Stored procedures are executed with `SQL SECURITY DEFINER` owned by a dedicated routine definer (`ledgerline_definer`).
+   - The definer account holds narrow, least-privilege DML privileges on the schema (`SELECT, UPDATE` on `accounts` and `transactions`, `SELECT, INSERT` on `ledger_entries` and `statement_events`).
+   - It possesses zero DDL, trigger, or grant privileges, preventing excessive definer privilege escalation.
+
+3. **Stored Procedure Hardened Write Boundaries & Spring Transaction Ownership**:
+   - **Transaction Ownership**: Stored procedures contain zero internal `START TRANSACTION`, `COMMIT`, or `ROLLBACK` commands. They define `DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN RESIGNAL; END;`, which propagates SQL exceptions directly to the caller. The application's Spring service layer (`@Transactional(rollbackFor = Exception.class)`) owns the full transaction lifecycle.
+   - `sp_post_ledger_pair`:
+     - **Lifecycle Enforcement**: Locks the transaction row (`FOR UPDATE`) and enforces `status = 'PENDING'`. A transaction cannot be posted twice (`VIOLATION: Transaction is already POSTED`).
+     - **Parameter Verification**: Validates caller-supplied initiating user ID, accounts, and amounts against the locked transaction row, rejecting forged parameters.
+     - **Deterministic Locking**: Locks source and destination accounts in deterministic ID order (`min(id)` then `max(id)`) to eliminate deadlocks.
+     - **Derived Balances & Sequences**: Derives resulting balances from current account states (checking overdrafts) and increments monotonic sequence counters. Validates caller expectations (if passed) against derivations.
+     - **Balanced Insertion**: Inserts balanced DEBIT and CREDIT entries simultaneously into `ledger_entries` and transitions `transactions.status` to `POSTED`.
+   - `sp_record_statement_event`:
+     - Locks target account and validates parent transaction consistency (participant accounts, initiator, amount, status).
+     - Derives running balances and sequence numbers from persisted account state.
+     - For `REFUSED` transactions, keeps account balance unchanged while advancing the statement sequence counter.
+     - Prevents duplicate statement entries for the same transaction and account.
+
+4. **Database Engine Uniqueness Constraints & Immutability Triggers**:
+   - **Composite Uniqueness**:
+     - `ledger_entries.uq_ledger_tx_entry UNIQUE (transaction_id, entry_type)` guarantees a transaction can have at most one DEBIT and one CREDIT.
+     - `ledger_entries.uq_ledger_account_sequence UNIQUE (account_id, sequence_number)` guarantees unique sequence numbers per account.
+     - `statement_events.uq_account_sequence UNIQUE (account_id, sequence_number)` guarantees unique statement sequences.
+     - `transactions.uq_single_successful_reversal UNIQUE (reversal_target_id)` prevents duplicate successful reversals.
+   - **Triggers**:
+     - `trg_tx_prevent_insert_posted`: Blocks direct insertion of transactions in `POSTED` status.
+     - `trg_tx_prevent_finalized_update`: Blocks modifications to `POSTED` or `REFUSED` transactions.
+     - `trg_tx_prevent_delete`: Blocks deletion of transactions.
+     - `trg_ledger_prevent_update` & `trg_ledger_prevent_delete`: Blocks modification or deletion of ledger entries (`SQLSTATE 45000`).
+     - `trg_stmt_prevent_update` & `trg_stmt_prevent_delete`: Blocks modification or deletion of statement events (`SQLSTATE 45000`).
+
+### B. Accurate Security Scope & Administrator Privilege Distinction
+- **What Triggers Defend Against**: Accidental application updates, ORM cascade deletes, and compromised application sessions attempting to alter historical ledger records.
+- **What Triggers Do Not Defend Against**:
+  - A privileged database administrator (e.g. MySQL `root` or an account holding `SUPER`, `SYSTEM_VARIABLES_ADMIN`, or `TRIGGER` privileges) who can execute `DROP TRIGGER` or bypass logging.
+  - SQL injection in general (e.g. injecting unauthorized `INSERT` statements). SQL injection is prevented strictly at the application layer via Spring Data JPA / Hibernate parameterized queries and strict DTO validation.
+
+### C. Continuous Ledger Imbalance Detection View (`v_unbalanced_transactions`)
+In relational databases, cross-row balancing cannot be enforced by a static row-level `CHECK` constraint because rows are inserted sequentially. While the application's `@Transactional` service guarantees atomic multi-entry posting, migration `V4` deploys a continuous reconciliation view:
+```sql
+CREATE OR REPLACE VIEW v_unbalanced_transactions AS
+SELECT 
+    transaction_id,
+    COALESCE(SUM(CASE WHEN entry_type = 'DEBIT' THEN amount ELSE 0.00 END), 0.00) AS total_debits,
+    COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' THEN amount ELSE 0.00 END), 0.00) AS total_credits,
+    COALESCE(SUM(CASE WHEN entry_type = 'DEBIT' THEN amount ELSE -amount END), 0.00) AS net_imbalance
+FROM ledger_entries
+GROUP BY transaction_id
+HAVING net_imbalance != 0.00;
+```
+Any transaction with $\sum \text{Debits} \neq \sum \text{Credits}$ is immediately surfaced for real-time alerting and audit inspection.
+
+### D. Engine-Level Immutability Triggers
 ```sql
 DELIMITER //
 CREATE TRIGGER trg_ledger_prevent_update
